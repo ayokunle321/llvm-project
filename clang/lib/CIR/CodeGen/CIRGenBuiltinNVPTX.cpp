@@ -77,6 +77,174 @@ static mlir::Value makeScopedAtomicXchg(CIRGenFunction &cgf,
   return xchg.getResult();
 }
 
+namespace {
+// Maps an MMA load/store builtin to the LLVM intrinsic name variants that
+// implement it, one per supported layout ("col"/"row"). An empty name means
+// that layout isn't supported for this builtin.
+struct NVPTXMmaLdstInfo {
+  unsigned numResults; // Number of elements to load/store.
+  llvm::StringRef intrinsicCol;
+  llvm::StringRef intrinsicRow;
+};
+} // namespace
+
+#define MMA_INTR(geomOpType, layout) "nvvm.wmma." geomOpType "." layout ".stride"
+#define MMA_LDST(n, geomOpType)                                              \
+  { n, MMA_INTR(geomOpType, "col"), MMA_INTR(geomOpType, "row") }
+
+static NVPTXMmaLdstInfo getNVPTXMmaLdstInfo(unsigned builtinId) {
+  switch (builtinId) {
+  // FP MMA loads.
+  case NVPTX::BI__hmma_m16n16k16_ld_a:
+    return MMA_LDST(8, "m16n16k16.load.a.f16");
+  case NVPTX::BI__hmma_m16n16k16_ld_b:
+    return MMA_LDST(8, "m16n16k16.load.b.f16");
+  case NVPTX::BI__hmma_m16n16k16_ld_c_f16:
+    return MMA_LDST(4, "m16n16k16.load.c.f16");
+  case NVPTX::BI__hmma_m16n16k16_ld_c_f32:
+    return MMA_LDST(8, "m16n16k16.load.c.f32");
+  case NVPTX::BI__hmma_m32n8k16_ld_a:
+    return MMA_LDST(8, "m32n8k16.load.a.f16");
+  case NVPTX::BI__hmma_m32n8k16_ld_b:
+    return MMA_LDST(8, "m32n8k16.load.b.f16");
+  case NVPTX::BI__hmma_m32n8k16_ld_c_f16:
+    return MMA_LDST(4, "m32n8k16.load.c.f16");
+  case NVPTX::BI__hmma_m32n8k16_ld_c_f32:
+    return MMA_LDST(8, "m32n8k16.load.c.f32");
+  case NVPTX::BI__hmma_m8n32k16_ld_a:
+    return MMA_LDST(8, "m8n32k16.load.a.f16");
+  case NVPTX::BI__hmma_m8n32k16_ld_b:
+    return MMA_LDST(8, "m8n32k16.load.b.f16");
+  case NVPTX::BI__hmma_m8n32k16_ld_c_f16:
+    return MMA_LDST(4, "m8n32k16.load.c.f16");
+  case NVPTX::BI__hmma_m8n32k16_ld_c_f32:
+    return MMA_LDST(8, "m8n32k16.load.c.f32");
+
+  // Integer MMA loads.
+  case NVPTX::BI__imma_m16n16k16_ld_a_s8:
+    return MMA_LDST(2, "m16n16k16.load.a.s8");
+  case NVPTX::BI__imma_m16n16k16_ld_a_u8:
+    return MMA_LDST(2, "m16n16k16.load.a.u8");
+  case NVPTX::BI__imma_m16n16k16_ld_b_s8:
+    return MMA_LDST(2, "m16n16k16.load.b.s8");
+  case NVPTX::BI__imma_m16n16k16_ld_b_u8:
+    return MMA_LDST(2, "m16n16k16.load.b.u8");
+  case NVPTX::BI__imma_m16n16k16_ld_c:
+    return MMA_LDST(8, "m16n16k16.load.c.s32");
+  case NVPTX::BI__imma_m32n8k16_ld_a_s8:
+    return MMA_LDST(4, "m32n8k16.load.a.s8");
+  case NVPTX::BI__imma_m32n8k16_ld_a_u8:
+    return MMA_LDST(4, "m32n8k16.load.a.u8");
+  case NVPTX::BI__imma_m32n8k16_ld_b_s8:
+    return MMA_LDST(1, "m32n8k16.load.b.s8");
+  case NVPTX::BI__imma_m32n8k16_ld_b_u8:
+    return MMA_LDST(1, "m32n8k16.load.b.u8");
+  case NVPTX::BI__imma_m32n8k16_ld_c:
+    return MMA_LDST(8, "m32n8k16.load.c.s32");
+  case NVPTX::BI__imma_m8n32k16_ld_a_s8:
+    return MMA_LDST(1, "m8n32k16.load.a.s8");
+  case NVPTX::BI__imma_m8n32k16_ld_a_u8:
+    return MMA_LDST(1, "m8n32k16.load.a.u8");
+  case NVPTX::BI__imma_m8n32k16_ld_b_s8:
+    return MMA_LDST(4, "m8n32k16.load.b.s8");
+  case NVPTX::BI__imma_m8n32k16_ld_b_u8:
+    return MMA_LDST(4, "m8n32k16.load.b.u8");
+  case NVPTX::BI__imma_m8n32k16_ld_c:
+    return MMA_LDST(8, "m8n32k16.load.c.s32");
+
+  // Sub-integer MMA loads.
+  // Only row/col layout is supported by A/B fragments.
+  case NVPTX::BI__imma_m8n8k32_ld_a_s4:
+    return {1, "", MMA_INTR("m8n8k32.load.a.s4", "row")};
+  case NVPTX::BI__imma_m8n8k32_ld_a_u4:
+    return {1, "", MMA_INTR("m8n8k32.load.a.u4", "row")};
+  case NVPTX::BI__imma_m8n8k32_ld_b_s4:
+    return {1, MMA_INTR("m8n8k32.load.b.s4", "col"), ""};
+  case NVPTX::BI__imma_m8n8k32_ld_b_u4:
+    return {1, MMA_INTR("m8n8k32.load.b.u4", "col"), ""};
+  case NVPTX::BI__imma_m8n8k32_ld_c:
+    return MMA_LDST(2, "m8n8k32.load.c.s32");
+  case NVPTX::BI__bmma_m8n8k128_ld_a_b1:
+    return {1, "", MMA_INTR("m8n8k128.load.a.b1", "row")};
+  case NVPTX::BI__bmma_m8n8k128_ld_b_b1:
+    return {1, MMA_INTR("m8n8k128.load.b.b1", "col"), ""};
+  case NVPTX::BI__bmma_m8n8k128_ld_c:
+    return MMA_LDST(2, "m8n8k128.load.c.s32");
+
+  // Double MMA loads.
+  case NVPTX::BI__dmma_m8n8k4_ld_a:
+    return MMA_LDST(1, "m8n8k4.load.a.f64");
+  case NVPTX::BI__dmma_m8n8k4_ld_b:
+    return MMA_LDST(1, "m8n8k4.load.b.f64");
+  case NVPTX::BI__dmma_m8n8k4_ld_c:
+    return MMA_LDST(2, "m8n8k4.load.c.f64");
+
+  // Alternate float MMA loads.
+  case NVPTX::BI__mma_bf16_m16n16k16_ld_a:
+    return MMA_LDST(4, "m16n16k16.load.a.bf16");
+  case NVPTX::BI__mma_bf16_m16n16k16_ld_b:
+    return MMA_LDST(4, "m16n16k16.load.b.bf16");
+  case NVPTX::BI__mma_bf16_m8n32k16_ld_a:
+    return MMA_LDST(2, "m8n32k16.load.a.bf16");
+  case NVPTX::BI__mma_bf16_m8n32k16_ld_b:
+    return MMA_LDST(8, "m8n32k16.load.b.bf16");
+  case NVPTX::BI__mma_bf16_m32n8k16_ld_a:
+    return MMA_LDST(8, "m32n8k16.load.a.bf16");
+  case NVPTX::BI__mma_bf16_m32n8k16_ld_b:
+    return MMA_LDST(2, "m32n8k16.load.b.bf16");
+  case NVPTX::BI__mma_tf32_m16n16k8_ld_a:
+    return MMA_LDST(4, "m16n16k8.load.a.tf32");
+  case NVPTX::BI__mma_tf32_m16n16k8_ld_b:
+    return MMA_LDST(4, "m16n16k8.load.b.tf32");
+  case NVPTX::BI__mma_tf32_m16n16k8_ld_c:
+    return MMA_LDST(8, "m16n16k8.load.c.f32");
+
+  // NOTE: We need to follow the inconsistent naming scheme used by NVCC.
+  // Unlike PTX and LLVM IR where stores always use fragment D, NVCC builtins
+  // always use fragment C for both loads and stores.
+  // FP MMA stores.
+  case NVPTX::BI__hmma_m16n16k16_st_c_f16:
+    return MMA_LDST(4, "m16n16k16.store.d.f16");
+  case NVPTX::BI__hmma_m16n16k16_st_c_f32:
+    return MMA_LDST(8, "m16n16k16.store.d.f32");
+  case NVPTX::BI__hmma_m32n8k16_st_c_f16:
+    return MMA_LDST(4, "m32n8k16.store.d.f16");
+  case NVPTX::BI__hmma_m32n8k16_st_c_f32:
+    return MMA_LDST(8, "m32n8k16.store.d.f32");
+  case NVPTX::BI__hmma_m8n32k16_st_c_f16:
+    return MMA_LDST(4, "m8n32k16.store.d.f16");
+  case NVPTX::BI__hmma_m8n32k16_st_c_f32:
+    return MMA_LDST(8, "m8n32k16.store.d.f32");
+
+  // Integer and sub-integer MMA stores.
+  // Another naming quirk: unlike other MMA builtins that use PTX types in
+  // the name, integer loads/stores use LLVM's i32.
+  case NVPTX::BI__imma_m16n16k16_st_c_i32:
+    return MMA_LDST(8, "m16n16k16.store.d.s32");
+  case NVPTX::BI__imma_m32n8k16_st_c_i32:
+    return MMA_LDST(8, "m32n8k16.store.d.s32");
+  case NVPTX::BI__imma_m8n32k16_st_c_i32:
+    return MMA_LDST(8, "m8n32k16.store.d.s32");
+  case NVPTX::BI__imma_m8n8k32_st_c_i32:
+    return MMA_LDST(2, "m8n8k32.store.d.s32");
+  case NVPTX::BI__bmma_m8n8k128_st_c_i32:
+    return MMA_LDST(2, "m8n8k128.store.d.s32");
+
+  // Double MMA store.
+  case NVPTX::BI__dmma_m8n8k4_st_c_f64:
+    return MMA_LDST(2, "m8n8k4.store.d.f64");
+
+  // Alternate float MMA store.
+  case NVPTX::BI__mma_m16n16k8_st_c_f32:
+    return MMA_LDST(8, "m16n16k8.store.d.f32");
+
+  default:
+    llvm_unreachable("Unknown MMA builtin");
+  }
+}
+#undef MMA_LDST
+#undef MMA_INTR
+
 std::optional<mlir::Value>
 CIRGenFunction::emitNVPTXBuiltinExpr(unsigned builtinId, const CallExpr *expr) {
   switch (builtinId) {
