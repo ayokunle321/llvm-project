@@ -2919,10 +2919,12 @@ void ASTWriter::WritePreprocessorDetail(PreprocessingRecord &PPRec,
   if (SkippedRanges.size() > 0) {
     std::vector<PPSkippedRange> SerializedSkippedRanges;
     SerializedSkippedRanges.reserve(SkippedRanges.size());
-    for (auto const& Range : SkippedRanges)
+    for (auto const &Range : SkippedRanges) {
+      SourceRange R = getAdjustedRange(Range);
       SerializedSkippedRanges.emplace_back(
-          getRawSourceLocationEncoding(Range.getBegin()),
-          getRawSourceLocationEncoding(Range.getEnd()));
+          getRawSourceLocationEncoding(R.getBegin()),
+          getRawSourceLocationEncoding(R.getEnd()));
+    }
 
     using namespace llvm;
     auto Abbrev = std::make_shared<BitCodeAbbrev>();
@@ -5592,6 +5594,17 @@ void ASTWriter::computeNonAffectingInputFiles() {
 
   auto AffectingModuleMaps = GetAffectingModuleMaps(*PP, WritingModule);
 
+  // Unlike a SourceLocation, a FileID is written as an index into our own SLoc
+  // table, so it cannot name a file we leave out. Collect the files something
+  // still refers to by FileID.
+  llvm::DenseSet<FileID> NamedFileIDs;
+  NamedFileIDs.insert(SrcMgr.getMainFileID());
+  if (SrcMgr.hasLineTable())
+    for (const auto &L : SrcMgr.getLineTable())
+      NamedFileIDs.insert(L.first);
+  for (const auto &F : PP->getDiagnostics().DiagStatesByLoc.Files)
+    NamedFileIDs.insert(F.first);
+
   unsigned FileIDAdjustment = 0;
   unsigned OffsetAdjustment = 0;
 
@@ -5646,25 +5659,22 @@ void ASTWriter::computeNonAffectingInputFiles() {
       if (!AffectingModuleMaps)
         continue;
 
+      // Don't prune module maps that are affecting. The submodule block names
+      // them by FileID when an inferred module was uniqued by one, so they
+      // cannot be redirected either.
+      if (AffectingModuleMaps->DefinitionFileIDs.contains(FID))
+        continue;
+
       // A module map nothing points into can be left out along with its
       // locations.
-      if (!AffectingModuleMaps->DefinitionFileIDs.contains(FID)) {
-        IsSLocAffecting[I] = false;
-        IsSLocFileEntryAffecting[I] =
-            AffectingModuleMaps->DefinitionFiles.contains(*Cache->OrigEntry);
-        MarkNonAffecting(FID, 0);
-        continue;
-      }
-
-      // An affecting module map falls through. We can still leave it out if
-      // a module we import has it, since its locations then have a copy to
-      // point at.
+      IsSLocAffecting[I] = false;
+      IsSLocFileEntryAffecting[I] =
+          AffectingModuleMaps->DefinitionFiles.contains(*Cache->OrigEntry);
+      MarkNonAffecting(FID, 0);
+      continue;
     }
 
-    // Keep the main file. We write its FileID as the original file of this
-    // module, and an adjusted FileID only names a file whose entries we
-    // wrote.
-    if (FID == SrcMgr.getMainFileID())
+    if (NamedFileIDs.contains(FID))
       continue;
 
     // A module we import may already have this input file. If it does, we
@@ -6824,6 +6834,9 @@ FileID ASTWriter::getAdjustedFileID(FileID FID) const {
   if (FID.isInvalid() || PP->getSourceManager().isLoadedFileID(FID) ||
       NonAffectingFileIDs.empty())
     return FID;
+  assert(getRedirectedLocation(PP->getSourceManager().getLocForStartOfFile(FID))
+             .isInvalid() &&
+         "Cannot name a redirected file by FileID");
   auto It = llvm::lower_bound(NonAffectingFileIDs, FID);
   unsigned Idx = std::distance(NonAffectingFileIDs.begin(), It);
   unsigned Offset = NonAffectingFileIDAdjustments[Idx];
