@@ -1008,10 +1008,12 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   case AMDGPU::BI__builtin_amdgcn_raw_buffer_store_b64:
   case AMDGPU::BI__builtin_amdgcn_raw_buffer_store_b96:
   case AMDGPU::BI__builtin_amdgcn_raw_buffer_store_b128: {
-    cgm.errorNYI(expr->getSourceRange(),
-                 std::string("unimplemented AMDGPU builtin call: ") +
-                     getContext().BuiltinInfo.getName(builtinId));
-    return mlir::Value{};
+    // The store returns nothing, so ask for a void result. The helper would
+    // otherwise take the type of the value we are storing.
+    return emitBuiltinWithOneOverloadedType<5>(
+               expr, "amdgcn.raw.ptr.buffer.store",
+               cir::VoidType::get(builder.getContext()))
+        .getValue();
   }
   case AMDGPU::BI__builtin_amdgcn_raw_buffer_load_b8:
   case AMDGPU::BI__builtin_amdgcn_raw_buffer_load_b16:
