@@ -1010,6 +1010,15 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
   case AMDGPU::BI__builtin_amdgcn_raw_buffer_store_b128: {
     // The store returns nothing, so ask for a void result. The helper would
     // otherwise take the type of the value we are storing.
+    //
+    // TODO(CIR): b96 lowers correctly here, but has no test coverage: reading
+    // the 3-element vdata operand out of its lvalue trips the NYI in
+    // emitLoadOfScalar / emitStoreOfScalar, which bail out on any 3-element
+    // vector based on the element count alone. AMDGPU has legal 96-bit
+    // instructions, so <3 x i32> needs no widening in the first place -- those
+    // two should be asking the target for the vector memory type (see
+    // AMDGPUABIInfo::getOptimalVectorMemoryType in classic codegen) rather
+    // than rejecting the case outright.
     return emitBuiltinWithOneOverloadedType<5>(
                expr, "amdgcn.raw.ptr.buffer.store",
                cir::VoidType::get(builder.getContext()))
