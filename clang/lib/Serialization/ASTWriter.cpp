@@ -5603,7 +5603,8 @@ void ASTWriter::computeNonAffectingInputFiles() {
     for (const auto &L : SrcMgr.getLineTable())
       NamedFileIDs.insert(L.first);
   for (const auto &F : PP->getDiagnostics().DiagStatesByLoc.Files)
-    NamedFileIDs.insert(F.first);
+    if (F.second.HasLocalTransitions)
+      NamedFileIDs.insert(F.first);
 
   unsigned FileIDAdjustment = 0;
   unsigned OffsetAdjustment = 0;
