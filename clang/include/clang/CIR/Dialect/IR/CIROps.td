@@ -4447,23 +4447,38 @@ def CIR_LLVMIntrinsicCallOp : CIR_Op<"call_llvm_intrinsic"> {
     `cir.call_llvm_intrinsic` operation represents a call-like expression which has
     return type and arguments that maps directly to a llvm intrinsic.
     It only records intrinsic `intrinsic_name`.
+
+    A unit attribute `invariant` can be used to indicate that the memory the
+    intrinsic reads never changes, mapping to LLVM IR's `!invariant.load`
+    metadata on the call.
+
+    ```mlir
+    %0 = cir.call_llvm_intrinsic "amdgcn.ptr.s.buffer.load" invariant %rsrc,
+           %offset, %aux : (!cir.ptr<!void, target_address_space(8)>, !s32i,
+           !s32i) -> !cir.float
+    ```
   }];
 
   let results = (outs Optional<CIR_AnyType>:$result);
   let arguments = (ins
-                   StrAttr:$intrinsic_name, Variadic<CIR_AnyType>:$arg_ops);
+                   StrAttr:$intrinsic_name, Variadic<CIR_AnyType>:$arg_ops,
+                   UnitAttr:$invariant);
 
   let skipDefaultBuilders = 1;
 
   let assemblyFormat = [{
-    $intrinsic_name $arg_ops `:` functional-type($arg_ops, $result) attr-dict
+    $intrinsic_name (`invariant` $invariant^)? $arg_ops
+    `:` functional-type($arg_ops, $result) attr-dict
   }];
 
   let builders = [
     OpBuilder<(ins "mlir::StringAttr":$intrinsic_name, "mlir::Type":$resType,
-              CArg<"mlir::ValueRange", "{}">:$operands), [{
+              CArg<"mlir::ValueRange", "{}">:$operands,
+              CArg<"bool", "false">:$invariant), [{
       $_state.addAttribute("intrinsic_name", intrinsic_name);
       $_state.addOperands(operands);
+      if (invariant)
+        $_state.addAttribute("invariant", $_builder.getUnitAttr());
       if (resType)
         $_state.addTypes(resType);
     }]>,

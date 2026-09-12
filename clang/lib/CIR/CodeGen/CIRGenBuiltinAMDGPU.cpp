@@ -1050,6 +1050,36 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
                      getContext().BuiltinInfo.getName(builtinId));
     return mlir::Value{};
   }
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_i32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v2i32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v3i32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v4i32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v8i32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v16i32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_f32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v2f32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v3f32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v4f32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v8f32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v16f32:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_i8:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_u8:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_i16:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_u16:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v2i8:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v3i8:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v4i8:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_f16:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v2f16:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v3f16:
+  case AMDGPU::BI__builtin_amdgcn_s_buffer_load_v4f16:
+    return builder.emitIntrinsicCallOp(
+        getLoc(expr->getExprLoc()), "amdgcn.ptr.s.buffer.load",
+        convertType(expr->getType()),
+        mlir::ValueRange{emitScalarExpr(expr->getArg(0)),
+                         emitScalarExpr(expr->getArg(1)),
+                         emitScalarExpr(expr->getArg(2))},
+        /*invariant=*/true);
   case AMDGPU::BI__builtin_amdgcn_s_prefetch_data: {
     cgm.errorNYI(expr->getSourceRange(),
                  std::string("unimplemented AMDGPU builtin call: ") +

@@ -592,8 +592,10 @@ mlir::LogicalResult CIRToLLVMLLVMIntrinsicCallOpLowering::matchAndRewrite(
   // TODO(cir): MLIR LLVM dialect should handle this part as CIR has no way
   // to set LLVM IR attribute.
   assert(!cir::MissingFeatures::intrinsicElementTypeSupport());
-  replaceOpWithCallLLVMIntrinsicOp(rewriter, op, "llvm." + name, llvmResTy,
-                                   adaptor.getOperands());
+  mlir::LLVM::CallIntrinsicOp newOp = replaceOpWithCallLLVMIntrinsicOp(
+      rewriter, op, "llvm." + name, llvmResTy, adaptor.getOperands());
+  if (op.getInvariant())
+    newOp.setInvariant(true);
   return mlir::success();
 }
 
