@@ -1022,6 +1022,18 @@ CIRGenFunction::emitAMDGPUBuiltinExpr(unsigned builtinId,
                      getContext().BuiltinInfo.getName(builtinId));
     return mlir::Value{};
   }
+  case AMDGPU::BI__builtin_amdgcn_struct_buffer_store_format_v4f32:
+  case AMDGPU::BI__builtin_amdgcn_struct_buffer_store_format_v4f16:
+    return emitBuiltinWithOneOverloadedType<6>(
+               expr, "amdgcn.struct.ptr.buffer.store.format",
+               cir::VoidType::get(builder.getContext()))
+        .getValue();
+  case AMDGPU::BI__builtin_amdgcn_struct_buffer_load_format_v4f32:
+  case AMDGPU::BI__builtin_amdgcn_struct_buffer_load_format_v4f16:
+    return emitBuiltinWithOneOverloadedType<5>(
+               expr, "amdgcn.struct.ptr.buffer.load.format",
+               convertType(expr->getType()))
+        .getValue();
   case AMDGPU::BI__builtin_amdgcn_raw_ptr_buffer_atomic_add_i32: {
     cgm.errorNYI(expr->getSourceRange(),
                  std::string("unimplemented AMDGPU builtin call: ") +
