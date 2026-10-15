@@ -236,16 +236,22 @@ bool APFloatBase::isRepresentableBy(const fltSemantics &A,
 }
 
 bool APFloatBase::isLosslesslyConvertibleTo(const fltSemantics &From,
-                                            const fltSemantics &To,
+                                            const fltSemantics &InitialTo,
                                             bool IgnoreNaNs) {
-  if (&From == &To)
+  if (&From == &InitialTo)
     return true;
 
   // PPC double-double cannot be described by a conventional exponent range
   // and precision. In particular, converting it to another semantics drops
-  // its low double, so conservatively reject conversions involving it.
-  if (&From == &semPPCDoubleDouble || &To == &semPPCDoubleDouble)
+  // its low double, so conservatively reject conversions from it.
+  if (&From == &semPPCDoubleDouble)
     return false;
+
+  // Converting to PPC double-double is lossless exactly when the value fits
+  // in its high double. In other words, the conversion is lossless if the
+  // conversion to IEEEdouble is lossless.
+  const fltSemantics &To =
+      &InitialTo == &semPPCDoubleDouble ? semIEEEdouble : InitialTo;
 
   if (!isRepresentableBy(From, To))
     return false;
@@ -3591,9 +3597,11 @@ APInt IEEEFloat::convertIEEEFloatToAPInt() const {
   }
   std::fill(words_iter, words.end(), uint64_t{0});
   constexpr size_t last_word = words.size() - 1;
-  uint64_t shifted_sign = static_cast<uint64_t>(sign & 1)
-                          << ((S.sizeInBits - 1) % 64);
-  words[last_word] |= shifted_sign;
+  if constexpr (S.hasSignedRepr) {
+    uint64_t shifted_sign = static_cast<uint64_t>(sign & 1)
+                            << ((S.sizeInBits - 1) % 64);
+    words[last_word] |= shifted_sign;
+  }
   uint64_t shifted_exponent = (myexponent & exponent_mask)
                               << (trailing_significand_bits % 64);
   words[last_word] |= shifted_exponent;
@@ -3805,11 +3813,15 @@ void IEEEFloat::initFromPPCDoubleDoubleLegacyAPInt(const APInt &api) {
   // Unless we have a special case, add in second double.
   if (isFiniteNonZero()) {
     IEEEFloat v(APFloatBase::semIEEEdouble, APInt(64, i2));
-    fs = v.convert(APFloatBase::semPPCDoubleDoubleLegacy, rmNearestTiesToEven,
-                   &losesInfo);
-    assert(fs == opOK && !losesInfo);
+    // The first double determines the category, so ignore a non-canonical
+    // second double.
+    if (v.isFinite()) {
+      fs = v.convert(APFloatBase::semPPCDoubleDoubleLegacy, rmNearestTiesToEven,
+                     &losesInfo);
+      assert(fs == opOK && !losesInfo);
 
-    add(v, rmNearestTiesToEven);
+      add(v, rmNearestTiesToEven);
+    }
   }
 }
 

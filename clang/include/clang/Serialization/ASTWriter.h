@@ -85,6 +85,7 @@ enum class DeclUpdateKind;
 
 namespace SrcMgr {
 class FileInfo;
+class SLocEntry;
 } // namespace SrcMgr
 
 /// Writes an AST file containing the contents of a translation unit.
@@ -542,6 +543,13 @@ private:
   std::vector<SourceRange> NonAffectingRanges;
   std::vector<SourceLocation::UIntTy> NonAffectingOffsetAdjustments;
 
+  /// Adjustment from a local range to the corresponding loaded range. Zero
+  /// means the range has no loaded copy.
+  ///
+  /// Unlike the adjustment vectors above, this vector is indexed by range, so
+  /// entry \c I corresponds to \c NonAffectingRanges[I].
+  std::vector<int64_t> NonAffectingRedirectAdjustments;
+
   /// A list of classes in named modules which need to emit the VTable in
   /// the corresponding object file.
   llvm::SmallVector<CXXRecordDecl *> PendingEmittingVTables;
@@ -556,6 +564,13 @@ private:
   SourceLocation getAffectingIncludeLoc(const SourceManager &SourceMgr,
                                         const SrcMgr::FileInfo &File);
 
+  /// Returns \p Loc in a loaded copy of its file, or an invalid location if it
+  /// cannot be redirected, which includes any macro or already loaded one.
+  SourceLocation getRedirectedLocation(SourceLocation Loc) const;
+
+  /// Returns the first non-affecting range whose end is not before \p Offset.
+  unsigned getNonAffectingRangeLowerBound(SourceLocation::UIntTy Offset) const;
+
   /// Returns an adjusted \c FileID, accounting for any non-affecting input
   /// files.
   FileID getAdjustedFileID(FileID FID) const;
@@ -565,6 +580,11 @@ private:
   /// Returns an adjusted \c SourceLocation, accounting for any non-affecting
   /// input files.
   SourceLocation getAdjustedLocation(SourceLocation Loc) const;
+
+  /// Returns \p Loc adjusted for non-affecting input files, but never
+  /// redirected at a copy in a loaded module file. For values a reader
+  /// resolves against this module file rather than in the global source space.
+  SourceLocation getAdjustedLocalLocation(SourceLocation Loc) const;
   /// Returns an adjusted \c SourceRange, accounting for any non-affecting input
   /// files.
   SourceRange getAdjustedRange(SourceRange Range) const;
@@ -648,6 +668,7 @@ private:
   void WritePackPragmaOptions(Sema &SemaRef);
   void WriteFloatControlPragmaOptions(Sema &SemaRef);
   void WriteDeclsWithEffectsToVerify(Sema &SemaRef);
+  void WriteOpenMPRequiresDecls(Sema &SemaRef);
   void WriteModuleFileExtension(Sema &SemaRef,
                                 ModuleFileExtensionWriter &Writer);
   void WriteRISCVIntrinsicPragmas(Sema &SemaRef);
@@ -745,8 +766,31 @@ public:
   /// Emit a FileID.
   void AddFileID(FileID FID, RecordDataImpl &Record);
 
+  /// The starting offset of \p SLoc's entry within this module, with the dummy
+  /// entry skipped. This is what an SLocEntry record stores as its first field.
+  SourceLocation::UIntTy getEntryOffset(const SrcMgr::SLocEntry &SLoc) const;
+
+  /// Emit \p Offset as the next record field and return a chain anchored at
+  /// \p Offset + \p InitialDelta, for delta encoding the locations that follow.
+  static SourceLocationEncoding::Chain
+  EmitSourceLocationOffset(SourceLocation::UIntTy Offset,
+                           SourceLocation::UIntTy InitialDelta,
+                           RecordDataImpl &Record);
+
+  /// Emit \p SLoc's entry offset as the record's first field and return a chain
+  /// anchored at that entry, for delta encoding the locations that follow.
+  SourceLocationEncoding::Chain EmitEntryOffset(const SrcMgr::SLocEntry &SLoc,
+                                                RecordDataImpl &Record);
+
   /// Emit a source location.
   void AddSourceLocation(SourceLocation Loc, RecordDataImpl &Record);
+
+  /// Emit a source location, delta encoded against \p Chain.
+  void AddSourceLocation(SourceLocation Loc, RecordDataImpl &Record,
+                         SourceLocationEncoding::Chain &Chain);
+
+  /// Emit a source location that stays local to this module file.
+  void AddLocalSourceLocation(SourceLocation Loc, RecordDataImpl &Record);
 
   /// Return the raw encodings for source locations.
   SourceLocationEncoding::RawLocEncoding
